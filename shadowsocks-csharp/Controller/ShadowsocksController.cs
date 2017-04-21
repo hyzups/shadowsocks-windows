@@ -493,6 +493,11 @@ namespace Shadowsocks.Controller
                 ReportError(e);
             }
 
+            if (_config.hotkey.RegisterOnStartup)
+            {
+                Hotkeys.HotKeys.RegisterAll(_config.hotkey);
+            }
+
             if (ConfigChanged != null)
             {
                 ConfigChanged(this, new EventArgs());

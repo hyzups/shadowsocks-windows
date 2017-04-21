@@ -52,6 +52,7 @@ namespace Shadowsocks.View
 
         private void LoadConfiguration(HotkeyConfig config)
         {
+            checkBoxRegisterOnStartup.Checked = config.RegisterOnStartup;
             SwitchSystemProxyTextBox.Text = config.SwitchSystemProxy;
             SwitchProxyModeTextBox.Text = config.SwitchSystemProxyMode;
             SwitchAllowLanTextBox.Text = config.SwitchAllowLan;
@@ -235,6 +236,7 @@ namespace Shadowsocks.View
 
         private void SaveConfig()
         {
+            _modifiedConfig.RegisterOnStartup = checkBoxRegisterOnStartup.Checked;
             _modifiedConfig.SwitchSystemProxy = SwitchSystemProxyTextBox.Text;
             _modifiedConfig.SwitchSystemProxyMode = SwitchProxyModeTextBox.Text;
             _modifiedConfig.SwitchAllowLan = SwitchAllowLanTextBox.Text;

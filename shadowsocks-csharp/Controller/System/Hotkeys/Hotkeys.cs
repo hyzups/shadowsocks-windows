@@ -4,11 +4,36 @@ using System.ComponentModel;
 using System.Linq;
 using System.Windows.Input;
 using GlobalHotKey;
+using Shadowsocks.Model;
 
 namespace Shadowsocks.Controller.Hotkeys
 {
     public static class HotKeys
     {
+        public static void RegisterAll(HotkeyConfig config)
+        {
+            Register(config.ServerMoveDown, nameof(config.ServerMoveDown));
+            Register(config.ServerMoveUp, nameof(config.ServerMoveUp));
+            Register(config.ShowLogs, nameof(config.ShowLogs));
+            Register(config.SwitchAllowLan, nameof(config.SwitchAllowLan));
+            Register(config.SwitchSystemProxy, nameof(config.SwitchSystemProxy));
+            Register(config.SwitchSystemProxyMode, nameof(config.SwitchSystemProxyMode));
+        }
+
+        public static void Register(string keyString, string configName)
+        {
+            if (String.IsNullOrWhiteSpace(keyString) || String.IsNullOrWhiteSpace(configName))
+            {
+                return;
+            }
+            var hotkey = HotKeys.Str2HotKey(keyString);
+            var callBack = HotkeyCallbacks.GetCallback(configName + "Callback");
+            if (hotkey != null && callBack != null)
+            {
+                HotKeys.Regist(hotkey, callBack as HotKeys.HotKeyCallBackHandler);
+            }
+        }
+
         private static HotKeyManager _hotKeyManager;
 
         public delegate void HotKeyCallBackHandler();
@@ -36,14 +61,14 @@ namespace Shadowsocks.Controller.Hotkeys
             if (_keymap.TryGetValue(hotkey, out callback))
                 callback();
         }
-        
-        public static bool IsHotkeyExists( HotKey hotKey )
+
+        public static bool IsHotkeyExists(HotKey hotKey)
         {
             if (hotKey == null) throw new ArgumentNullException(nameof(hotKey));
-            return _keymap.Any( v => v.Key.Equals( hotKey ) );
+            return _keymap.Any(v => v.Key.Equals(hotKey));
         }
 
-        public static bool IsCallbackExists( HotKeyCallBackHandler cb, out HotKey hotkey)
+        public static bool IsCallbackExists(HotKeyCallBackHandler cb, out HotKey hotkey)
         {
             if (cb == null) throw new ArgumentNullException(nameof(cb));
             try
@@ -59,16 +84,16 @@ namespace Shadowsocks.Controller.Hotkeys
                 return false;
             }
         }
-        public static string HotKey2Str( HotKey key )
+        public static string HotKey2Str(HotKey key)
         {
             if (key == null) throw new ArgumentNullException(nameof(key));
-            return HotKey2Str( key.Key, key.Modifiers );
+            return HotKey2Str(key.Key, key.Modifiers);
         }
 
-        public static string HotKey2Str( Key key, ModifierKeys modifier )
+        public static string HotKey2Str(Key key, ModifierKeys modifier)
         {
             if (!Enum.IsDefined(typeof(Key), key))
-                throw new InvalidEnumArgumentException(nameof(key), (int) key, typeof(Key));
+                throw new InvalidEnumArgumentException(nameof(key), (int)key, typeof(Key));
             try
             {
                 ModifierKeysConverter mkc = new ModifierKeysConverter();
@@ -96,8 +121,8 @@ namespace Shadowsocks.Controller.Hotkeys
 
                 KeyConverter kc = new KeyConverter();
                 ModifierKeysConverter mkc = new ModifierKeysConverter();
-                Key key = (Key) kc.ConvertFrom(keyStr.ToUpper());
-                ModifierKeys modifier = (ModifierKeys) mkc.ConvertFrom(modifierStr.ToUpper());
+                Key key = (Key)kc.ConvertFrom(keyStr.ToUpper());
+                ModifierKeys modifier = (ModifierKeys)mkc.ConvertFrom(modifierStr.ToUpper());
 
                 return new HotKey(key, modifier);
             }
@@ -112,7 +137,7 @@ namespace Shadowsocks.Controller.Hotkeys
             }
         }
 
-        public static bool Regist( HotKey key, HotKeyCallBackHandler callBack )
+        public static bool Regist(HotKey key, HotKeyCallBackHandler callBack)
         {
             if (key == null)
                 throw new ArgumentNullException(nameof(key));
@@ -141,7 +166,7 @@ namespace Shadowsocks.Controller.Hotkeys
         public static bool Regist(Key key, ModifierKeys modifiers, HotKeyCallBackHandler callBack)
         {
             if (!Enum.IsDefined(typeof(Key), key))
-                throw new InvalidEnumArgumentException(nameof(key), (int) key, typeof(Key));
+                throw new InvalidEnumArgumentException(nameof(key), (int)key, typeof(Key));
             try
             {
                 var hotkey = _hotKeyManager.Register(key, modifiers);
@@ -167,7 +192,7 @@ namespace Shadowsocks.Controller.Hotkeys
             if (key == null)
                 throw new ArgumentNullException(nameof(key));
             _hotKeyManager.Unregister(key);
-            if(_keymap.ContainsKey(key))
+            if (_keymap.ContainsKey(key))
                 _keymap.Remove(key);
         }
     }

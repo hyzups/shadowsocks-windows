@@ -11,6 +11,7 @@ namespace Shadowsocks.Model
     [Serializable]
     public class HotkeyConfig
     {
+        public Boolean RegisterOnStartup;
         public string SwitchSystemProxy;
         public string SwitchSystemProxyMode;
         public string SwitchAllowLan;
@@ -20,6 +21,7 @@ namespace Shadowsocks.Model
 
         public HotkeyConfig()
         {
+            RegisterOnStartup = false;
             SwitchSystemProxy = "";
             SwitchSystemProxyMode = "";
             SwitchAllowLan = "";
