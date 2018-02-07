@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
@@ -14,6 +15,8 @@ using Shadowsocks.Model;
 using Shadowsocks.Properties;
 using Shadowsocks.Util;
 using System.Linq;
+using Shadowsocks.Controller.Service;
+using Shadowsocks.Proxy;
 
 namespace Shadowsocks.Controller
 {
@@ -33,6 +36,8 @@ namespace Shadowsocks.Controller
         private StrategyManager _strategyManager;
         private PrivoxyRunner privoxyRunner;
         private GFWListUpdater gfwListUpdater;
+        private readonly ConcurrentDictionary<Server, Sip003Plugin> _pluginsByServer;
+
         public AvailabilityStatistics availabilityStatistics = AvailabilityStatistics.Instance;
         public StatisticsStrategyConfiguration StatisticsConfiguration { get; private set; }
 
@@ -43,8 +48,6 @@ namespace Shadowsocks.Controller
         public Queue<TrafficPerSecond> trafficPerSecondQueue;
 
         private bool stopped = false;
-
-        private bool _systemProxyIsDirty = false;
 
         public class PathEventArgs : EventArgs
         {
@@ -81,6 +84,7 @@ namespace Shadowsocks.Controller
             _config = Configuration.Load();
             StatisticsConfiguration = StatisticsStrategyConfiguration.Load();
             _strategyManager = new StrategyManager(this);
+            _pluginsByServer = new ConcurrentDictionary<Server, Sip003Plugin>();
             StartReleasingMemory();
             StartTrafficStatistics(61);
         }
@@ -144,6 +148,31 @@ namespace Shadowsocks.Controller
                 _config.index = 0;
             }
             return GetCurrentServer();
+        }
+
+        public EndPoint GetPluginLocalEndPointIfConfigured(Server server)
+        {
+            var plugin = _pluginsByServer.GetOrAdd(server, Sip003Plugin.CreateIfConfigured);
+            if (plugin == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                if (plugin.StartIfNeeded())
+                {
+                    Logging.Info(
+                        $"Started SIP003 plugin for {server.Identifier()} on {plugin.LocalEndPoint} - PID: {plugin.ProcessId}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Logging.Error("Failed to start SIP003 plugin: " + ex.Message);
+                throw;
+            }
+
+            return plugin.LocalEndPoint;
         }
 
         public void SaveServers(List<Server> servers, int localPort)
@@ -261,6 +290,7 @@ namespace Shadowsocks.Controller
             {
                 _listener.Stop();
             }
+            StopPlugins();
             if (privoxyRunner != null)
             {
                 privoxyRunner.Stop();
@@ -270,6 +300,15 @@ namespace Shadowsocks.Controller
                 SystemProxy.Update(_config, true, null);
             }
             Encryption.RNG.Close();
+        }
+
+        private void StopPlugins()
+        {
+            foreach (var serverAndPlugin in _pluginsByServer)
+            {
+                serverAndPlugin.Value?.Dispose();
+            }
+            _pluginsByServer.Clear();
         }
 
         public void TouchPACFile()
@@ -290,22 +329,50 @@ namespace Shadowsocks.Controller
             }
         }
 
-        public string GetQRCodeForCurrentServer()
+        public string GetServerURLForCurrentServer()
         {
             Server server = GetCurrentServer();
-            return GetQRCode(server);
+            return GetServerURL(server);
         }
 
-        public static string GetQRCode(Server server)
+        public static string GetServerURL(Server server)
         {
             string tag = string.Empty;
-            string parts = $"{server.method}:{server.password}@{server.server}:{server.server_port}";
-            string base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(parts));
-            if(!server.remarks.IsNullOrEmpty())
+            string url = string.Empty;
+
+            if (string.IsNullOrWhiteSpace(server.plugin))
+            {
+                // For backwards compatiblity, if no plugin, use old url format
+                string parts = $"{server.method}:{server.password}@{server.server}:{server.server_port}";
+                string base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(parts));
+                url = base64;
+            }
+            else
+            {
+                // SIP002
+                string parts = $"{server.method}:{server.password}";
+                string base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(parts));
+                string websafeBase64 = base64.Replace('+', '-').Replace('/', '_').TrimEnd('=');
+
+                string pluginPart = server.plugin;
+                if (!string.IsNullOrWhiteSpace(server.plugin_opts))
+                {
+                    pluginPart += ";" + server.plugin_opts;
+                }
+
+                url = string.Format(
+                    "{0}@{1}:{2}/?plugin={3}",
+                    websafeBase64,
+                    HttpUtility.UrlEncode(server.server, Encoding.UTF8),
+                    server.server_port,
+                    HttpUtility.UrlEncode(pluginPart, Encoding.UTF8));
+            }
+
+            if (!server.remarks.IsNullOrEmpty())
             {
                 tag = $"#{HttpUtility.UrlEncode(server.remarks, Encoding.UTF8)}";
             }
-            return $"ss://{base64}{tag}";
+            return $"ss://{url}{tag}";
         }
 
         public void UpdatePACFromGFWList()
@@ -452,6 +519,9 @@ namespace Shadowsocks.Controller
             {
                 _listener.Stop();
             }
+
+            StopPlugins();
+
             // don't put PrivoxyRunner.Start() before pacServer.Stop()
             // or bind will fail when switching bind address from 0.0.0.0 to 127.0.0.1
             // though UseShellExecute is set to true now
@@ -465,6 +535,7 @@ namespace Shadowsocks.Controller
                     strategy.ReloadServers();
                 }
 
+                StartPlugin();
                 privoxyRunner.Start(_config);
 
                 TCPRelay tcpRelay = new TCPRelay(this, _config);
@@ -507,6 +578,12 @@ namespace Shadowsocks.Controller
             Utils.ReleaseMemory(true);
         }
 
+        private void StartPlugin()
+        {
+            var server = _config.GetCurrentServer();
+            GetPluginLocalEndPointIfConfigured(server);
+        }
+
         protected void SaveConfig(Configuration newConfig)
         {
             Configuration.Save(newConfig);
@@ -515,20 +592,7 @@ namespace Shadowsocks.Controller
 
         private void UpdateSystemProxy()
         {
-            if (_config.enabled)
-            {
-                SystemProxy.Update(_config, false, _pacServer);
-                _systemProxyIsDirty = true;
-            }
-            else
-            {
-                // only switch it off if we have switched it on
-                if (_systemProxyIsDirty)
-                {
-                    SystemProxy.Update(_config, false, _pacServer);
-                    _systemProxyIsDirty = false;
-                }
-            }
+            SystemProxy.Update(_config, false, _pacServer);
         }
 
         private void pacServer_PACFileChanged(object sender, EventArgs e)
@@ -557,7 +621,7 @@ namespace Shadowsocks.Controller
                 UpdatePACFromGFWList();
                 return;
             }
-            List<string> lines = GFWListUpdater.ParseResult(FileManager.NonExclusiveReadAllText(Utils.GetTempPath("gfwlist.txt")));
+            List<string> lines = new List<string>();
             if (File.Exists(PACServer.USER_RULE_FILE))
             {
                 string local = FileManager.NonExclusiveReadAllText(PACServer.USER_RULE_FILE, Encoding.UTF8);
@@ -571,6 +635,7 @@ namespace Shadowsocks.Controller
                     }
                 }
             }
+            lines.AddRange(GFWListUpdater.ParseResult(FileManager.NonExclusiveReadAllText(Utils.GetTempPath("gfwlist.txt"))));
             string abpContent;
             if (File.Exists(PACServer.USER_ABP_FILE))
             {
